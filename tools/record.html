@@ -1,0 +1,152 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Press+Start+2P&display=swap" rel="stylesheet">
+</head><body style="margin:0;background:#000">
+<canvas id="game" style="display:none"></canvas>
+<canvas id="out" width="720" height="1280"></canvas>
+<script>window.MANUAL = true;</script>
+<script src="../stages.js"></script>
+<script src="../game.js"></script>
+<script>
+// 紹介動画の書き出し用。見どころの場面を順に作って、1コマずつ JPEG で返す
+const out = document.getElementById('out'), o = out.getContext('2d');
+o.imageSmoothingEnabled = false;
+const LOG = [];
+let vf = 0;
+for (const k of Object.keys(SFX)) { const f = SFX[k]; SFX[k] = (...a) => { LOG.push({ t: vf / 30, sfx: k }); f(...a); }; }
+// 撮影中は被弾しない（トラクタービームの場面だけは捕まる）
+hitCore = () => {};
+hitUnit = () => {};
+
+function goto(si, pi, parts) {
+  newGame();
+  G.si = si; G.pi = pi; E = []; EB = []; PB = []; IT = []; FX = []; TX = [];
+  startPhase();
+  G.banner = null; G.warp = 1; G.warpTo = 1;
+  S.delay = 0;
+  P.units = parts.slice(); P.inv = 0;
+}
+const run = (n) => { for (let i = 0; i < n; i++) { bot(); update(); } };
+
+// 簡単な自動操縦: アイテム > 地上の格納庫 > 一番下の敵 の順に真下へ行って撃つ
+let botOn = true, botX = null;
+function bot() {
+  for (const k of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) keys[k] = false;
+  keys.KeyZ = false;
+  if (!botOn || G.state !== 'play' || !P.alive) return;
+  if (S.type === 'docking') {
+    keys.ArrowLeft = P.x > S.mx + 1 && P.vx > -0.5;
+    keys.ArrowRight = P.x < S.mx - 1 && P.vx < 0.5;
+    keys.ArrowUp = P.vy > -0.7;
+    keys.ArrowDown = P.vy < -0.95;
+    return;
+  }
+  let tx = 120, ty = 285;
+  const air = E.filter((e) => e.st !== 'ally' && e.st !== 'captured' && e.st !== 'ground' && !(e.wait > 0)).sort((a, b) => b.y - a.y)[0];
+  const hangar = E.find((e) => e.kind === 'hangar' && e.y > 0);
+  if (S.boss) tx = S.boss.x; else if (hangar) tx = hangar.x; else if (air) tx = air.x;
+  if (IT.length) { tx = IT[0].x; ty = clamp(IT[0].y, 160, 290); }
+  if (botX !== null) tx = botX;
+  keys.ArrowLeft = tx < P.x - 2; keys.ArrowRight = tx > P.x + 2;
+  keys.ArrowUp = ty < P.y - 2; keys.ArrowDown = ty > P.y + 2;
+  keys.KeyZ = true;
+}
+
+const SCENES = [
+  { id: 'opening', sec: 3.5, song: 'title', cap: ['GALA CRESTA', 'レトロ縦シューティング 全部のせ'],
+    setup() { G.state = 'title'; E = []; FX = []; } },
+  { id: 'formation', sec: 5, song: 'stage', cap: ['編隊攻撃', '陣形を組んで 急降下してくる'],
+    setup() { goto(1, 0, [2, 3]); botOn = false; run(900); botOn = true; } },
+  { id: 'snare', sec: 5, cap: ['スネアビーム', '敵を吸い込んで 味方にする'],
+    setup() { goto(1, 0, [2, 3]); S.diveT = 1e9; botOn = false; run(1000); botOn = true; G.snare = 2; },
+    tick(t) { botX = 120; if (t === 30) pr.KeyX = true; } },
+  { id: 'tractor', sec: 6.5, cap: ['トラクタービーム', '奪われたパーツは 撃って取り返せ'],
+    setup() {
+      goto(1, 0, [2, 3]); S.diveT = 1e9; botOn = false; run(1000); botOn = true;
+      const w = E.filter((e) => e.kind === 'warden' && e.st === 'form').sort((a, b) => Math.abs(a.x - 120) - Math.abs(b.x - 120))[0];
+      this.w = w; w.st = 'beamdown'; w.t = 0; w.tx = 120;
+    },
+    tick(t) {
+      const w = this.w;
+      if (!w.dead && !w.captive) { botX = 120; keys.KeyZ = false; }
+      else botX = null;
+      if (w.captive && w.st === 'form' && !this.dove) { this.dove = true; startDive(w); }
+      if (!w.dead && !w.captive) this.noFire = true; else this.noFire = false;
+    } },
+  { id: 'scroll', sec: 6, song: 'scroll', cap: ['地上攻撃', '格納庫を壊して パーツを回収'],
+    setup() { goto(3, 0, [2, 3]); S.dist = 520; S.gq = S.gq.filter((g) => g.d >= 520); S.aq = S.aq.filter((a) => a.d >= 700); run(60); } },
+  { id: 'dock', sec: 6.5, song: 'dock', cap: ['ドッキング', 'ゆっくり まっすぐ 合体せよ'],
+    setup() { goto(4, 0, [2, 3, 4]); S.part = 5; P.x = 70; P.y = 270; P.vx = 0.4; P.vy = 0; G.banner = null; } },
+  { id: 'orbit', sec: 4, song: 'stage', cap: ['オービット', 'パーツを展開して 周りを守る'],
+    setup() { goto(5, 0, [2, 3, 4]); run(420); },
+    tick(t) { if (t === 6) { G.gauge = 100; pr.KeyC = true; } } },
+  { id: 'firebird', sec: 6, cap: ['ファイアバード', '4パーツ合体で 無敵の火の鳥'],
+    setup() { goto(7, 1, [2, 3, 4, 5]); run(480); },
+    tick(t) { if (t === 6) { G.gauge = 100; pr.KeyC = true; } } },
+  { id: 'bonus', sec: 4, song: 'challenge', cap: ['ボーナスアタック', '撃ってこない40機を 全部落とせ'],
+    setup() { goto(2, 0, [2, 3, 4, 5]); run(170); } },
+  { id: 'gorgon', sec: 6.5, song: 'boss', cap: ['巨大ボス', 'GORGON'],
+    setup() {
+      goto(1, 2, [2, 3, 4]);
+      S.boss = makeBoss('gorgon'); Object.assign(S.boss, { enter: false, y: 78, t: 100 });
+      S.boss.hp = S.boss.maxHp * 0.3; for (const p of S.boss.parts) p.hp = 8;
+      G.banner = null; run(30);
+    } },
+  { id: 'mother', sec: 5, cap: ['巨大ボス', 'MOTHER ARCA'],
+    setup() { goto(5, 2, [2, 3]); S.boss = makeBoss('mother'); Object.assign(S.boss, { enter: false, y: 80, t: 380 }); G.banner = null; run(10); } },
+  { id: 'queen', sec: 6, cap: ['最終ボス', 'QUEEN ASTRA'],
+    setup() { goto(9, 1, [2, 3]); S.boss = makeBoss('queen'); Object.assign(S.boss, { enter: false, y: 80, t: 295 }); G.banner = null; run(5); } },
+  { id: 'ending', sec: 5, song: 'title', cap: ['いますぐ遊べる', 'naga3.github.io/galacresta'],
+    setup() { G.state = 'title'; E = []; FX = []; TX = []; G.banner = null; } },
+];
+
+let CUR = null, scT = 0, frames = 0;
+function startScene(i) {
+  const sc = SCENES[i];
+  botOn = true; botX = null;
+  sc.setup();
+  CUR = sc; scT = 0;
+  if (sc.song) LOG.push({ t: vf / 30, song: sc.song });
+  return Math.round(sc.sec * 30);
+}
+// 1コマ進めて描き、JPEG の dataURL を返す
+function nextFrame() {
+  for (let k = 0; k < 2; k++) {
+    botX = null;
+    if (CUR.tick) CUR.tick(scT);
+    bot();
+    if (CUR.noFire) keys.KeyZ = false;
+    update();
+    scT++;
+  }
+  render();
+  compose();
+  vf++;
+  return out.toDataURL('image/jpeg', 0.9);
+}
+
+function capText(s, x, y, size, col, align = 'center', font = 'DotGothic16') {
+  o.font = `${size}px "${font}", "Noto Sans CJK JP", sans-serif`;
+  o.textAlign = align; o.textBaseline = 'middle';
+  o.lineJoin = 'round'; o.lineWidth = size / 5; o.strokeStyle = '#000';
+  o.strokeText(s, x, y);
+  o.fillStyle = col; o.fillText(s, x, y);
+}
+function compose() {
+  const g = o.createLinearGradient(0, 0, 0, 1280);
+  g.addColorStop(0, '#140828'); g.addColorStop(0.5, '#05030c'); g.addColorStop(1, '#140828');
+  o.fillStyle = g; o.fillRect(0, 0, 720, 1280);
+  o.drawImage(cv, 0, 160, 720, 960);
+  o.fillStyle = `hsl(${(vf * 4) % 360},90%,55%)`;
+  o.fillRect(0, 156, 720, 4); o.fillRect(0, 1120, 720, 4);
+  const a = Math.min(1, scT / 16), slide = (1 - a) * 80;
+  o.globalAlpha = 1;
+  capText('GALA CRESTA', 360, 34, 22, `hsl(${(vf * 4) % 360},100%,70%)`, 'center', 'Press Start 2P');
+  o.globalAlpha = a;
+  capText(CUR.cap[0], 360 - slide, 100, 58, '#fff');
+  capText(CUR.cap[1], 360 + slide, 1200, 40, '#ffe070');
+  o.globalAlpha = 1;
+  if (scT < 8) { o.globalAlpha = (8 - scT) / 8 * 0.8; o.fillStyle = '#fff'; o.fillRect(0, 0, 720, 1280); o.globalAlpha = 1; }
+}
+</script>
+</body></html>

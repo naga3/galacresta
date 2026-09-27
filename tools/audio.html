@@ -1,0 +1,47 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head><body>
+<canvas id="game"></canvas>
+<script src="../stages.js"></script>
+<script src="../game.js"></script>
+<script>
+// オフラインで音を書き出すためのページ。ゲームのループは止めておく
+G.state = 'idle';
+function wavB64(buf) {
+  const ch = buf.numberOfChannels, n = buf.length, data = new DataView(new ArrayBuffer(44 + n * ch * 2));
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) data.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); data.setUint32(4, 36 + n * ch * 2, true); str(8, 'WAVEfmt ');
+  data.setUint32(16, 16, true); data.setUint16(20, 1, true); data.setUint16(22, ch, true);
+  data.setUint32(24, buf.sampleRate, true); data.setUint32(28, buf.sampleRate * ch * 2, true);
+  data.setUint16(32, ch * 2, true); data.setUint16(34, 16, true); str(36, 'data'); data.setUint32(40, n * ch * 2, true);
+  const chans = [...Array(ch)].map((_, c) => buf.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < n; i++) for (let c = 0; c < ch; c++) { data.setInt16(o, Math.max(-1, Math.min(1, chans[c][i])) * 32767, true); o += 2; }
+  const bytes = new Uint8Array(data.buffer);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+async function renderSong(name, sec) {
+  const oc = new OfflineAudioContext(2, 44100 * sec, 44100);
+  setupAudio(oc);
+  const s = SONGS[name], p = prepSong(s);
+  for (let i = 0, t = 0.05; t < sec - 0.5; i++, t += p.step) schedStep(s, i, t);
+  return wavB64(await oc.startRendering());
+}
+// 動画用: events = [{t, song}|{t, sfx}] を sec 秒ぶん書き出す
+async function renderTimeline(events, sec) {
+  const oc = new OfflineAudioContext(2, 44100 * sec, 44100);
+  setupAudio(oc);
+  master.gain.value = 0.3; // 効果音が重なっても割れないように下げておき、音量は ffmpeg でそろえる
+  const songs = events.filter((e) => 'song' in e).sort((a, b) => a.t - b.t);
+  songs.forEach((e, k) => {
+    if (!e.song) return;
+    const end = k + 1 < songs.length ? songs[k + 1].t : sec, s = SONGS[e.song], p = prepSong(s);
+    for (let i = 0, t = e.t; t < end - 0.02; i++, t += p.step) schedStep(s, i, t);
+  });
+  for (const e of events) if (e.sfx && SFX[e.sfx]) { sndT = e.t; SFX[e.sfx](); }
+  sndT = null;
+  return wavB64(await oc.startRendering());
+}
+</script>
+</body></html>

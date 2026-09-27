@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head><body style="margin:0;background:#000">
+<canvas id="game" style="width:480px;height:640px;image-rendering:pixelated"></canvas>
+<script src="../stages.js"></script>
+<script src="../game.js"></script>
+<script>
+// 画面確認用: ?scene=title|formation|scroll|gorgon|mother|queen|firebird|docking|challenge
+const q = new URLSearchParams(location.search);
+const scene = q.get('scene') || 'title';
+const run = (n, fire = true) => { for (let i = 0; i < n; i++) { keys.KeyZ = fire; update(); } keys.KeyZ = false; };
+const goto = (si, pi) => { G.si = si; G.pi = pi; E = []; EB = []; startPhase(); G.banner = null; };
+if (scene !== 'title') {
+  newGame();
+  G.lives = 99;
+  P.units = (q.get('parts') || '2,3,4,5').split(',').filter(Boolean).map((u) => (u === 'T' ? u : +u));
+  G.snare = 2;
+  if (scene === 'formation') { goto(1, 0); run(700); keys.KeyX = true; pr.KeyX = true; update(); keys.KeyX = false; run(40); }
+  if (scene === 'scroll') { goto(3, 0); run(900); }
+  if (scene === 'gorgon') { goto(1, 2); run(520); }
+  if (scene === 'mother') { goto(5, 2); run(200 + 420); }
+  if (scene === 'queen') { goto(9, 1); P.units = []; run(200 + 60 + 300 + 110, false); }
+  if (scene === 'firebird') { goto(7, 1); run(600); G.gauge = 100; pr.KeyC = true; update(); run(60); }
+  if (scene === 'docking') { goto(4, 0); P.units = [2, 3]; startPhase(); G.banner = null; P.x = 110; P.y = 160; run(10, false); }
+  if (scene === 'challenge') { goto(2, 0); run(420); }
+  G.lives = 3;
+  P.inv = 0;
+}
+</script>
+</body></html>
